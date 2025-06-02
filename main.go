@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -165,6 +166,7 @@ func (h *Hub) run() {
 			h.mu.Unlock()
 		case trace := <-h.broadcast:
 			h.mu.Lock()
+			log.Printf("📡 Broadcasting trace to %d WebSocket clients", len(h.clients))
 			for client := range h.clients {
 				err := client.WriteJSON(trace)
 				if err != nil {
@@ -204,6 +206,13 @@ func decompressBody(body []byte, encoding string) ([]byte, error) {
 
 	log.Printf("ℹ️ No decompression needed for encoding: %s", encoding)
 	return body, nil
+}
+
+// generateTraceID generates a simple unique ID for traces
+func generateTraceID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }
 
 // startOpenAIForwarder starts an HTTP server that forwards requests to OpenAI API
@@ -367,6 +376,7 @@ func startOpenAIForwarder() {
 
 		// Create trace for this forwarded request
 		trace := Trace{
+			Id:            generateTraceID(),
 			Timestamp:     time.Now(),
 			Method:        r.Method,
 			URL:           targetURL.String(),
@@ -409,15 +419,18 @@ func main() {
 			json.NewEncoder(w).Encode(traces)
 		})
 		http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("🔌 WebSocket connection attempt from %s", r.RemoteAddr)
 			conn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {
-				log.Printf("Upgrade error: %v", err)
+				log.Printf("❌ WebSocket upgrade error: %v", err)
 				return
 			}
+			log.Printf("✅ WebSocket connection established with %s", r.RemoteAddr)
 			hub.register <- conn
 			// Keep connection alive, unregister on error (e.g. client disconnects)
 			go func() {
 				defer func() {
+					log.Printf("🔌 WebSocket connection closed with %s", r.RemoteAddr)
 					hub.unregister <- conn
 					conn.Close()
 				}()

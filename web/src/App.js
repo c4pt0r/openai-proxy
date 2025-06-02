@@ -30,16 +30,23 @@ function App() {
   useEffect(() => {
     fetchTraces();
 
-    const ws = new WebSocket(`ws://${window.location.host}/ws`);
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = window.location.hostname;
+    const wsPort = '8081'; // WebSocket server runs on port 8081
+    const ws = new WebSocket(`${wsProtocol}//${wsHost}:${wsPort}/ws`);
 
     ws.onmessage = (event) => {
       try {
         const newTrace = JSON.parse(event.data);
+        console.log('📨 Received WebSocket message:', newTrace);
         if (newTrace.timestamp && newTrace.url) { // Filter incoming WS traces as well
           setTraces(prevTraces => {
             const updatedTraces = [newTrace, ...prevTraces].filter(trace => trace.timestamp && trace.url).slice(0, 100);
+            console.log('🔄 Updated traces, total count:', updatedTraces.length);
             return updatedTraces;
           });
+        } else {
+          console.log('⚠️ Received invalid trace (missing timestamp or url):', newTrace);
         }
       } catch (error) {
         console.error("Error processing WebSocket message:", error);
@@ -47,15 +54,15 @@ function App() {
     };
 
     ws.onopen = () => {
-      console.log("WebSocket connection established");
+      console.log("✅ WebSocket connection established");
     };
 
     ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
+      console.error("❌ WebSocket error:", error);
     };
 
     ws.onclose = () => {
-      console.log("WebSocket connection closed");
+      console.log("🔌 WebSocket connection closed");
       // Optionally, try to reconnect
     };
 
@@ -94,6 +101,11 @@ function App() {
   return (
     <div className="App">
       <main>
+        <SearchBar 
+          searchTerm={searchTerm} 
+          setSearchTerm={setSearchTerm} 
+          onSearch={handleSearch} 
+        />
         <TracesTable traces={filteredTraces} />
       </main>
     </div>
