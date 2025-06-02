@@ -1,0 +1,186 @@
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #0d1117; /* Dark background like the image */
+  color: #c9d1d9; /* Light text color */
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+.App {
+  text-align: left;
+  padding: 20px;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+  margin-bottom: 20px;
+}
+
+.App-header h1 {
+  font-size: 2em; /* Larger Traces title */
+  color: #c9d1d9;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.search-bar-container {
+  display: flex;
+  margin-bottom: 20px;
+  align-items: center;
+}
+
+.search-bar-container input[type="text"] {
+  padding: 10px;
+  border: 1px solid #30363d; /* Darker border */
+  border-radius: 6px;
+  background-color: #0d1117; /* Dark input background */
+  color: #c9d1d9;
+  font-size: 1em;
+  flex-grow: 1;
+  margin-right: 10px;
+}
+
+.search-bar-container button {
+  padding: 10px 15px;
+  background-color: #238636; /* Green button like in image (adjust color) */
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1em;
+  margin-left: 5px; /* Space between buttons */
+}
+
+.search-bar-container button.filter-button {
+  background-color: #21262d; /* Darker button for filter */
+  border: 1px solid #30363d;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+  font-size: 0.9em;
+}
+
+th,
+td {
+  border: 1px solid #30363d; /* Darker borders for table cells */
+  padding: 12px;
+  text-align: left;
+  white-space: nowrap; /* Prevent text wrapping initially */
+  overflow: hidden;
+  text-overflow: ellipsis; /* Add ellipsis for overflowed text */
+}
+
+td:nth-child(1) { /* ID column */
+  max-width: 100px;
+}
+td:nth-child(3) { /* Name column */
+  max-width: 150px;
+}
+td:nth-child(7) { /* Usage column */
+  max-width: 200px;
+  white-space: normal; /* Allow usage to wrap if needed */
+}
+
+th {
+  background-color: #161b22; /* Slightly lighter background for headers */
+  color: #8b949e; /* Lighter text for headers */
+  font-weight: bold;
+}
+
+tr:nth-child(even) {
+  /* background-color: #161b22; */ /* Optional: for striped rows, but image is solid */
+}
+
+tr:hover {
+  background-color: #21262d; /* Hover effect for rows */
+}
+
+/* Make ID clickable (if it were a link) */
+/* td:first-child a { color: #58a6ff; text-decoration: none; } */
+/* td:first-child a:hover { text-decoration: underline; } */
+
+/* Style for the action button (trash icon) */
+td button {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 1.2em;
+  padding: 0;
+}
+
+td button:hover {
+  color: #f0f6fc;
+}
+
+/* Adjustments for specific columns to match image more closely */
+
+/* Placeholder for any other global styles or component-specific styles */
+
+.details-row td {
+  border-top: 1px dashed #444; /* Separator for the details row */
+  background-color: #11161d; /* Slightly different background for details */
+}
+
+.details-content {
+  padding: 15px;
+  text-align: left;
+}
+
+.details-content h4 {
+  margin-top: 0;
+  margin-bottom: 5px;
+  color: #8b949e;
+}
+
+.details-content pre {
+  background-color: #010409; /* Very dark background for code blocks */
+  border: 1px solid #30363d;
+  padding: 10px;
+  border-radius: 6px;
+  color: #c9d1d9;
+  white-space: pre-wrap; /* Allow text to wrap in pre */
+  word-break: break-all; /* Break long words/strings */
+  max-height: 300px; /* Max height for scrollable content */
+  overflow-y: auto; /* Add scroll if content exceeds max height */
+}
