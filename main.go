@@ -108,7 +108,8 @@ type Trace struct {
 	Method        string      `json:"method"`
 	URL           string      `json:"url"`
 	Status        string      `json:"status"`
-	Latency       float64     `json:"latency"` // in seconds
+	Latency       float64     `json:"latency"`              // in seconds
+	SessionId     string      `json:"session_id,omitempty"` // OpenAI API session ID
 	RequestHeader http.Header `json:"request_headers,omitempty"`
 	RequestBody   string      `json:"request_body,omitempty"`
 	ResponseBody  string      `json:"response_body,omitempty"`
@@ -322,35 +323,7 @@ func startOpenAIForwarder() {
 		log.Printf("📊 Status: %s", resp.Status)
 		log.Printf("⏱️ Latency: %.3fs", latency)
 
-		// Read response body
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			http.Error(w, "Failed to read response", http.StatusInternalServerError)
-			return
-		}
-
-		// Decompress if needed
-		contentEncoding := resp.Header.Get("Content-Encoding")
-		if contentEncoding != "" {
-			decompressed, err := decompressBody(respBody, contentEncoding)
-			if err == nil {
-				respBody = decompressed
-				// Remove Content-Encoding header since we're serving uncompressed content
-				resp.Header.Del("Content-Encoding")
-			}
-		}
-
-		// Apply response hook
-		modifiedRespBody, modifiedRespHeaders, err := responseHook(respBody, resp.Header)
-		if err != nil {
-			log.Printf("❌ Response hook error: %v", err)
-			http.Error(w, "Response hook error", http.StatusInternalServerError)
-			return
-		}
-		respBody = modifiedRespBody
-		resp.Header = modifiedRespHeaders
-
-		// Copy response headers
+		// Copy response headers first
 		for name, values := range resp.Header {
 			for _, value := range values {
 				w.Header().Add(name, value)
@@ -360,38 +333,121 @@ func startOpenAIForwarder() {
 		// Set status code
 		w.WriteHeader(resp.StatusCode)
 
-		// Write response body
-		w.Write(respBody)
+		// Check if this is a streaming response (SSE)
+		contentType := resp.Header.Get("Content-Type")
+		isStreaming := strings.Contains(contentType, "text/event-stream") || strings.Contains(contentType, "text/plain")
 
-		// Log response body (truncated if too long)
-		responseBodyStr := string(respBody)
-		log.Printf("🔍 Content-Encoding: %s", resp.Header.Get("Content-Encoding"))
-		log.Printf("📏 Response body length: %d bytes", len(respBody))
+		if isStreaming {
+			log.Printf("🌊 Detected streaming response (Content-Type: %s), using streaming copy", contentType)
 
-		if len(responseBodyStr) > 2000 {
-			log.Printf("📝 Body: %s... (truncated, %d bytes total)", responseBodyStr[:2000], len(responseBodyStr))
+			// For streaming responses, copy directly without buffering
+			bytesWritten, err := io.Copy(w, resp.Body)
+			if err != nil {
+				log.Printf("❌ Streaming copy error: %v", err)
+				return
+			}
+
+			log.Printf("📏 Streamed %d bytes", bytesWritten)
+
+			// Extract session ID from response
+			sessionId := resp.Header.Get("X-Session-Id")
+			log.Printf("🆔 Session ID: %s", sessionId)
+
+			// Create trace for streaming request (without full response body)
+			trace := Trace{
+				Id:            generateTraceID(),
+				Timestamp:     time.Now(),
+				Method:        r.Method,
+				URL:           targetURL.String(),
+				Status:        resp.Status,
+				Latency:       latency,
+				SessionId:     sessionId,
+				RequestHeader: r.Header,
+				RequestBody:   string(bodyBytes),
+				ResponseBody:  fmt.Sprintf("[STREAMING RESPONSE - %d bytes]", bytesWritten),
+			}
+			traces = append(traces, trace)
+			if len(traces) > tracesMax {
+				traces = traces[len(traces)-tracesMax:]
+			}
+			// Broadcast trace to WebSocket clients
+			hub.broadcast <- trace
 		} else {
-			log.Printf("📝 Body: %s", responseBodyStr)
-		}
+			log.Printf("📦 Non-streaming response, buffering response body")
 
-		// Create trace for this forwarded request
-		trace := Trace{
-			Id:            generateTraceID(),
-			Timestamp:     time.Now(),
-			Method:        r.Method,
-			URL:           targetURL.String(),
-			Status:        resp.Status,
-			Latency:       latency,
-			RequestHeader: r.Header,
-			RequestBody:   string(bodyBytes),
-			ResponseBody:  responseBodyStr,
+			// For non-streaming responses, use the original buffering approach
+			respBody, err := io.ReadAll(resp.Body)
+			if err != nil {
+				http.Error(w, "Failed to read response", http.StatusInternalServerError)
+				return
+			}
+
+			// Decompress if needed
+			contentEncoding := resp.Header.Get("Content-Encoding")
+			if contentEncoding != "" {
+				decompressed, err := decompressBody(respBody, contentEncoding)
+				if err == nil {
+					respBody = decompressed
+					// Remove Content-Encoding header since we're serving uncompressed content
+					w.Header().Del("Content-Encoding")
+				}
+			}
+
+			// Apply response hook
+			modifiedRespBody, modifiedRespHeaders, err := responseHook(respBody, resp.Header)
+			if err != nil {
+				log.Printf("❌ Response hook error: %v", err)
+				return
+			}
+			respBody = modifiedRespBody
+
+			// Update headers if modified by hook
+			for name, values := range modifiedRespHeaders {
+				w.Header().Del(name)
+				for _, value := range values {
+					w.Header().Add(name, value)
+				}
+			}
+
+			// Write response body
+			w.Write(respBody)
+
+			// Log response body (truncated if too long)
+			responseBodyStr := string(respBody)
+			log.Printf("🔍 Response headers: %v", resp.Header)
+			log.Printf("🔍 Content-Encoding: %s", resp.Header.Get("Content-Encoding"))
+			log.Printf("📏 Response body length: %d bytes", len(respBody))
+
+			if len(responseBodyStr) > 2000 {
+				log.Printf("📝 Body: %s... (truncated, %d bytes total)", responseBodyStr[:2000], len(responseBodyStr))
+			} else {
+				log.Printf("📝 Body: %s", responseBodyStr)
+			}
+
+			// Extract session ID from response
+			sessionId := resp.Header.Get("X-Session-Id")
+			log.Printf("🆔 Session ID: %s", sessionId)
+
+			// Create trace for this forwarded request
+			trace := Trace{
+				Id:            generateTraceID(),
+				Timestamp:     time.Now(),
+				Method:        r.Method,
+				URL:           targetURL.String(),
+				Status:        resp.Status,
+				Latency:       latency,
+				SessionId:     sessionId,
+				RequestHeader: r.Header,
+				RequestBody:   string(bodyBytes),
+				ResponseBody:  responseBodyStr,
+			}
+			traces = append(traces, trace)
+			if len(traces) > tracesMax {
+				traces = traces[len(traces)-tracesMax:]
+			}
+			// Broadcast trace to WebSocket clients
+			hub.broadcast <- trace
 		}
-		traces = append(traces, trace)
-		if len(traces) > tracesMax {
-			traces = traces[len(traces)-tracesMax:]
-		}
-		// Broadcast trace to WebSocket clients
-		hub.broadcast <- trace
 
 		log.Println("=" + strings.Repeat("=", 30))
 	})
