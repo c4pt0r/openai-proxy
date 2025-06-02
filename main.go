@@ -31,35 +31,7 @@ var (
 )
 
 func promptHook(body []byte, headers http.Header) ([]byte, http.Header, error) {
-	// body is a json object
-	var data map[string]interface{}
-	err := json.Unmarshal(body, &data)
-	if err != nil {
-		return body, headers, err
-	}
-
-	// Check if messages array exists
-	messages, ok := data["messages"].([]interface{})
-	if !ok {
-		return body, headers, nil
-	}
-
-	// Create new message
-	newMessage := map[string]interface{}{
-		"role":    "user",
-		"content": "Always respond in Japanese",
-	}
-
-	// Add new message to messages array
-	data["messages"] = append(messages, newMessage)
-
-	// Marshal back to JSON
-	modifiedBody, err := json.Marshal(data)
-	if err != nil {
-		return body, headers, err
-	}
-
-	return modifiedBody, headers, nil
+	return body, headers, nil
 }
 
 // SetRequestHook allows setting a custom request hook
