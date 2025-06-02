@@ -30,7 +30,63 @@ var (
 	responseHook ResponseHook = func(body []byte, headers http.Header) ([]byte, http.Header, error) { return body, headers, nil }
 )
 
+func messagesHook(messages []map[string]interface{}) ([]map[string]interface{}, error) {
+	log.Printf("🔧 in messagesHook, Messages: %v", messages)
+	messagesBuf := bytes.NewBuffer(nil)
+	for _, message := range messages {
+		content, contentOk := message["content"].(string)
+		role, roleOk := message["role"].(string)
+		if contentOk && roleOk {
+			messagesBuf.WriteString(role + ": ")
+			messagesBuf.WriteString(content)
+			messagesBuf.WriteString("\n")
+		}
+	}
+	trimLog := messagesBuf.String()
+	if len(trimLog) > 2000 {
+		trimLog = trimLog[:1000] + "\n......\n" + trimLog[len(trimLog)-1000:]
+	}
+	log.Printf("🔧 Messages in session: %s", trimLog)
+	return messages, nil
+}
+
 func promptHook(body []byte, headers http.Header) ([]byte, http.Header, error) {
+	// Parse the request body as JSON
+	var requestBody map[string]interface{}
+	if err := json.Unmarshal(body, &requestBody); err != nil {
+		return body, headers, nil // Return original if not valid JSON
+	}
+
+	// Check if messages field exists and is an array
+	if messages, ok := requestBody["messages"].([]interface{}); ok {
+		// Convert messages to []map[string]interface{}
+		messagesArray := make([]map[string]interface{}, len(messages))
+		for i, msg := range messages {
+			if msgMap, ok := msg.(map[string]interface{}); ok {
+				messagesArray[i] = msgMap
+			} else {
+				return body, headers, nil // Return original if message format is invalid
+			}
+		}
+
+		// Call messagesHook to process the messages
+		modifiedMessages, err := messagesHook(messagesArray)
+		if err != nil {
+			return body, headers, err
+		}
+
+		// Update the messages in the request body
+		requestBody["messages"] = modifiedMessages
+
+		// Marshal back to JSON
+		modifiedBody, err := json.Marshal(requestBody)
+		if err != nil {
+			return body, headers, err
+		}
+
+		return modifiedBody, headers, nil
+	}
+
 	return body, headers, nil
 }
 
