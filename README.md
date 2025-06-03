@@ -15,7 +15,7 @@ A flexible proxy server for OpenAI API that enables request/response modificatio
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/openai-proxy.git
+git clone https://github.com/c4pt0r/openai-proxy.git
 cd openai-proxy
 ```
 
