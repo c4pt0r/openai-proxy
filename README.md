@@ -24,6 +24,13 @@ cd openai-proxy
 go run main.go
 ```
 
+3. Frontend (Request Viewer)
+```
+cd web
+npm install
+npm start
+```
+
 The server will start on:
 - OpenAI API Proxy: http://localhost:8080
 - Trace Viewer: http://localhost:8081
