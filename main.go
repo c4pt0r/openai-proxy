@@ -11,20 +11,216 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/gorilla/websocket"
+	lua "github.com/yuin/gopher-lua"
+	luajson "layeh.com/gopher-json"
 )
 
 // Hook functions for request and response modification
 type RequestHook func(body []byte, headers http.Header) ([]byte, http.Header, error)
 type ResponseHook func(body []byte, headers http.Header) ([]byte, http.Header, error)
 
+// LuaHookManager manages Lua scripts for request/response hooks
+type LuaHookManager struct {
+	mu          sync.RWMutex
+	luaScript   string
+	enabled     bool
+	hasRequest  bool
+	hasResponse bool
+}
+
+var luaHookManager = &LuaHookManager{
+	enabled: false,
+}
+
+// LoadHookScript loads a Lua script containing both processRequest and processResponse functions
+func (lhm *LuaHookManager) LoadHookScript(scriptPath string) error {
+	lhm.mu.Lock()
+	defer lhm.mu.Unlock()
+
+	// Read the script file
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return fmt.Errorf("failed to read Lua script file %s: %v", scriptPath, err)
+	}
+
+	script := string(data)
+
+	// Test the script by creating a temporary Lua state
+	L := lua.NewState()
+	defer L.Close()
+
+	// Add JSON support
+	luajson.Preload(L)
+
+	if err := L.DoString(script); err != nil {
+		return fmt.Errorf("failed to load Lua script: %v", err)
+	}
+
+	// Check which functions are available
+	hasRequest := L.GetGlobal("processRequest").Type() == lua.LTFunction
+	hasResponse := L.GetGlobal("processResponse").Type() == lua.LTFunction
+
+	if !hasRequest && !hasResponse {
+		return fmt.Errorf("Lua script must define at least one of 'processRequest' or 'processResponse' functions")
+	}
+
+	lhm.luaScript = script
+	lhm.hasRequest = hasRequest
+	lhm.hasResponse = hasResponse
+	lhm.enabled = true
+
+	log.Printf("✅ Lua hook script loaded successfully (processRequest: %v, processResponse: %v)", hasRequest, hasResponse)
+	return nil
+}
+
+// createLuaState creates a new Lua state with JSON support
+func (lhm *LuaHookManager) createLuaState() *lua.LState {
+	L := lua.NewState()
+	luajson.Preload(L)
+	return L
+}
+
+// httpHeaderToLuaTable converts http.Header to Lua table
+func httpHeaderToLuaTable(L *lua.LState, headers http.Header) *lua.LTable {
+	table := L.NewTable()
+	for name, values := range headers {
+		valueTable := L.NewTable()
+		for i, value := range values {
+			valueTable.RawSetInt(i+1, lua.LString(value))
+		}
+		table.RawSetString(strings.ToLower(name), valueTable)
+	}
+	return table
+}
+
+// luaTableToHttpHeader converts Lua table back to http.Header
+func luaTableToHttpHeader(L *lua.LState, table *lua.LTable) http.Header {
+	headers := make(http.Header)
+	table.ForEach(func(key, value lua.LValue) {
+		keyStr := key.String()
+		if valueTable, ok := value.(*lua.LTable); ok {
+			var values []string
+			valueTable.ForEach(func(_, v lua.LValue) {
+				values = append(values, v.String())
+			})
+			headers[keyStr] = values
+		}
+	})
+	return headers
+}
+
+// ExecuteRequestHook executes the Lua request hook if available
+func (lhm *LuaHookManager) ExecuteRequestHook(body []byte, headers http.Header) ([]byte, http.Header, error) {
+	lhm.mu.RLock()
+	defer lhm.mu.RUnlock()
+
+	if !lhm.enabled || !lhm.hasRequest || lhm.luaScript == "" {
+		return body, headers, nil
+	}
+
+	L := lhm.createLuaState()
+	defer L.Close()
+
+	// Load the script
+	if err := L.DoString(lhm.luaScript); err != nil {
+		log.Printf("❌ Error executing request hook script: %v", err)
+		return body, headers, nil // Return original on error
+	}
+
+	// Prepare arguments
+	L.Push(L.GetGlobal("processRequest"))
+	L.Push(lua.LString(string(body)))
+	L.Push(httpHeaderToLuaTable(L, headers))
+
+	// Call the function
+	if err := L.PCall(2, 2, nil); err != nil {
+		log.Printf("❌ Error calling processRequest function: %v", err)
+		return body, headers, nil // Return original on error
+	}
+
+	// Get results
+	modifiedBody := L.Get(-2)
+	modifiedHeaders := L.Get(-1)
+
+	var resultBody []byte
+	var resultHeaders http.Header = headers
+
+	if modifiedBody.Type() == lua.LTString {
+		resultBody = []byte(modifiedBody.String())
+	} else {
+		resultBody = body
+	}
+
+	if modifiedHeaders.Type() == lua.LTTable {
+		resultHeaders = luaTableToHttpHeader(L, modifiedHeaders.(*lua.LTable))
+	}
+
+	log.Printf("🔧 Lua request hook executed successfully")
+	return resultBody, resultHeaders, nil
+}
+
+// ExecuteResponseHook executes the Lua response hook if available
+func (lhm *LuaHookManager) ExecuteResponseHook(body []byte, headers http.Header) ([]byte, http.Header, error) {
+	lhm.mu.RLock()
+	defer lhm.mu.RUnlock()
+
+	if !lhm.enabled || !lhm.hasResponse || lhm.luaScript == "" {
+		return body, headers, nil
+	}
+
+	L := lhm.createLuaState()
+	defer L.Close()
+
+	// Load the script
+	if err := L.DoString(lhm.luaScript); err != nil {
+		log.Printf("❌ Error executing response hook script: %v", err)
+		return body, headers, nil // Return original on error
+	}
+
+	// Prepare arguments
+	L.Push(L.GetGlobal("processResponse"))
+	L.Push(lua.LString(string(body)))
+	L.Push(httpHeaderToLuaTable(L, headers))
+
+	// Call the function
+	if err := L.PCall(2, 2, nil); err != nil {
+		log.Printf("❌ Error calling processResponse function: %v", err)
+		return body, headers, nil // Return original on error
+	}
+
+	// Get results
+	modifiedBody := L.Get(-2)
+	modifiedHeaders := L.Get(-1)
+
+	var resultBody []byte
+	var resultHeaders http.Header = headers
+
+	if modifiedBody.Type() == lua.LTString {
+		resultBody = []byte(modifiedBody.String())
+	} else {
+		resultBody = body
+	}
+
+	if modifiedHeaders.Type() == lua.LTTable {
+		resultHeaders = luaTableToHttpHeader(L, modifiedHeaders.(*lua.LTable))
+	}
+
+	log.Printf("🔧 Lua response hook executed successfully")
+	return resultBody, resultHeaders, nil
+}
+
 var (
-	port = flag.Int("port", 8080, "OpenAI API port to listen on")
-	host = flag.String("host", "localhost", "OpenAI API host to listen on")
+	port                     = flag.Int("port", 8080, "OpenAI API port to listen on")
+	host                     = flag.String("host", "localhost", "OpenAI API host to listen on")
+	luaFile                  = flag.String("hook", "", "Path to Lua script with processRequest and processResponse functions")
+	printSampleHookLuaScript = flag.Bool("print-sample-hook-lua-script", false, "Print the sample Lua script")
 
 	// Default hook implementations that can be replaced
 	requestHook  RequestHook  = func(body []byte, headers http.Header) ([]byte, http.Header, error) { return body, headers, nil }
@@ -85,10 +281,11 @@ func promptHook(body []byte, headers http.Header) ([]byte, http.Header, error) {
 			return body, headers, err
 		}
 
-		return modifiedBody, headers, nil
+		body = modifiedBody
 	}
 
-	return body, headers, nil
+	// After existing processing, also apply Lua hooks if available
+	return luaHookManager.ExecuteRequestHook(body, headers)
 }
 
 // SetRequestHook allows setting a custom request hook
@@ -202,6 +399,19 @@ func decompressBody(body []byte, encoding string) ([]byte, error) {
 		}
 
 		log.Printf("✅ Successfully decompressed %d bytes -> %d bytes", len(body), len(decompressed))
+		return decompressed, nil
+	}
+
+	if encoding == "br" {
+		reader := brotli.NewReader(bytes.NewReader(body))
+
+		decompressed, err := io.ReadAll(reader)
+		if err != nil {
+			log.Printf("❌ Failed to decompress Brotli: %v", err)
+			return body, err // Return original if decompression fails
+		}
+
+		log.Printf("✅ Successfully decompressed Brotli %d bytes -> %d bytes", len(body), len(decompressed))
 		return decompressed, nil
 	}
 
@@ -401,6 +611,14 @@ func startOpenAIForwarder() {
 			}
 			respBody = modifiedRespBody
 
+			// Also apply Lua response hooks if available
+			modifiedRespBody, modifiedRespHeaders, err = luaHookManager.ExecuteResponseHook(respBody, modifiedRespHeaders)
+			if err != nil {
+				log.Printf("❌ Lua response hook error: %v", err)
+				return
+			}
+			respBody = modifiedRespBody
+
 			// Update headers if modified by hook
 			for name, values := range modifiedRespHeaders {
 				w.Header().Del(name)
@@ -418,10 +636,10 @@ func startOpenAIForwarder() {
 			log.Printf("🔍 Content-Encoding: %s", resp.Header.Get("Content-Encoding"))
 			log.Printf("📏 Response body length: %d bytes", len(respBody))
 
-			if len(responseBodyStr) > 2000 {
-				log.Printf("📝 Body: %s... (truncated, %d bytes total)", responseBodyStr[:2000], len(responseBodyStr))
+			if len(respBody) > 2000 {
+				log.Printf("📝 Body: %s... (truncated, %d bytes total)", respBody[:2000], len(respBody))
 			} else {
-				log.Printf("📝 Body: %s", responseBodyStr)
+				log.Printf("📝 Body: %s", respBody)
 			}
 
 			// Extract session ID from response
@@ -462,7 +680,32 @@ func startOpenAIForwarder() {
 	log.Fatal(server.ListenAndServe())
 }
 
+const sampleHookLuaScript = `
+function processRequest(body, headers)
+    -- Modify the request body and headers here
+    return body, headers
+end
+
+function processResponse(body, headers)
+    -- Modify the response body and headers here
+    return body, headers
+end
+`
+
 func main() {
+	flag.Parse()
+	if *printSampleHookLuaScript {
+		fmt.Println(sampleHookLuaScript)
+		return
+	}
+
+	// Load Lua hook script if specified
+	if *luaFile != "" {
+		if err := luaHookManager.LoadHookScript(*luaFile); err != nil {
+			log.Printf("❌ Failed to load Lua hook script: %v", err)
+		}
+	}
+
 	go hub.run()
 
 	// Start the OpenAI API server
