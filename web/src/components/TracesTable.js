@@ -90,7 +90,6 @@ const TracesTable = ({ traces }) => {
     <table>
       <thead>
         <tr>
-          <th>Session ID</th>
           <th>Timestamp</th>
           <th>Latency</th>
           <th>API Name</th>
@@ -101,7 +100,6 @@ const TracesTable = ({ traces }) => {
         {traces.map((trace, index) => (
           <React.Fragment key={index}>
             <tr onClick={() => toggleRow(index)} style={{ cursor: 'pointer' }}>
-              <td>{trace.session_id}</td> {/* Session ID - Not available from backend */}
               <td>{new Date(trace.timestamp).toLocaleString()}</td>
               <td>{trace.latency ? trace.latency.toFixed(2) + 's' : "N/A"}</td>
               <td>{getApiName(trace.url)}</td>
